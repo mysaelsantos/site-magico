@@ -1,265 +1,306 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useMemo, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { 
-  OrbitControls, 
-  PerspectiveCamera, 
+  useScroll, 
+  ScrollControls, 
+  Scroll, 
   Environment, 
   Float, 
-  MeshDistortMaterial, 
-  Sparkles,
-  Text,
-  useTexture,
-  MeshTransmissionMaterial
+  PerspectiveCamera,
+  Stars,
+  Sparkles
 } from '@react-three/drei';
-import { 
-  EffectComposer, 
-  Bloom, 
-  ChromaticAberration, 
-  Noise, 
-  Vignette,
-  Glitch
-} from '@react-three/postprocessing';
-import { BlendFunction, GlitchMode } from 'postprocessing';
+import { EffectComposer, Bloom, Noise, Vignette } from '@react-three/postprocessing';
 import * as THREE from 'three';
-import { motion } from 'framer-motion';
 
 /**
  * ============================================================================
- * THE CORE: LIQUID METAL ARTIFACT
+ * CONFIGURAÇÃO E DADOS
  * ============================================================================
  */
-const LiquidCore = ({ active }) => {
-  const meshRef = useRef(null);
+const THEME = {
+  primary: '#00f3ff',
+  secondary: '#ff0055',
+  bg: '#050505'
+};
+
+/**
+ * ============================================================================
+ * COMPONENTES 3D COMPLEXOS
+ * ============================================================================
+ */
+
+// Gera uma "peça" mecânica aleatória para compor o motor
+const TechPart = ({ index, z }) => {
+  const ref = useRef();
+  const scroll = useScroll();
   
+  // Aleatoriedade determinística baseada no index
+  const random = (seed) => Math.sin(seed * 123.45) * 0.5 + 0.5;
+  
+  const initialPos = useMemo(() => {
+    const angle = (index / 10) * Math.PI * 2;
+    const radius = 1 + random(index) * 2;
+    return [
+      Math.cos(angle) * radius, 
+      Math.sin(angle) * radius, 
+      z
+    ];
+  }, [index, z]);
+
+  useFrame((state, delta) => {
+    // A MÁGICA DO SCROLL:
+    // r1 é um valor de 0 a 1 baseado na posição do scroll
+    const r1 = scroll.range(0, 1); 
+    const r2 = scroll.range(0.2, 0.5); // Fase de explosão
+    
+    if (ref.current) {
+      // 1. Rotação constante + Aceleração com scroll
+      ref.current.rotation.z += delta * 0.2 + r1 * 0.5;
+      ref.current.rotation.x += delta * 0.1;
+
+      // 2. Efeito "Exploded View" (As peças se afastam do centro)
+      const explosionFactor = r2 * 5; 
+      ref.current.position.x = initialPos[0] * (1 + explosionFactor);
+      ref.current.position.y = initialPos[1] * (1 + explosionFactor);
+      ref.current.position.z = initialPos[2] + scroll.scroll.current * 5; // Avança em direção à câmera
+    }
+  });
+
+  // Geometria aleatória (Caixa ou Toro)
+  const isRing = index % 3 === 0;
+
+  return (
+    <mesh ref={ref} position={initialPos}>
+      {isRing ? (
+        <torusGeometry args={[random(index) * 0.5, 0.05, 16, 32]} />
+      ) : (
+        <boxGeometry args={[random(index), random(index), random(index)]} />
+      )}
+      <meshStandardMaterial 
+        color={index % 2 === 0 ? THEME.primary : '#ffffff'}
+        emissive={index % 2 === 0 ? THEME.primary : '#000'}
+        emissiveIntensity={index % 2 === 0 ? 2 : 0}
+        roughness={0.2}
+        metalness={1}
+        wireframe={index % 5 === 0} // Algumas peças em wireframe para estilo técnico
+      />
+    </mesh>
+  );
+};
+
+// O Motor Principal
+const HyperEngine = () => {
+  // Cria 50 peças
+  const parts = useMemo(() => new Array(50).fill(0).map((_, i) => i), []);
+
+  return (
+    <group rotation={[0, Math.PI / 2, 0]}>
+      {parts.map((i) => (
+        <TechPart key={i} index={i} z={(i - 25) / 5} />
+      ))}
+      {/* Núcleo Central */}
+      <mesh>
+        <sphereGeometry args={[1, 32, 32]} />
+        <meshStandardMaterial 
+          color={THEME.secondary} 
+          emissive={THEME.secondary}
+          emissiveIntensity={5}
+          toneMapped={false}
+        />
+      </mesh>
+      <pointLight color={THEME.secondary} intensity={10} distance={10} />
+    </group>
+  );
+};
+
+// Controlador da Câmera e Luzes baseado no Scroll
+const SceneDirector = () => {
+  const scroll = useScroll();
+  const { camera } = useThree();
+  const lightRef = useRef();
+
   useFrame((state) => {
-    const t = state.clock.getElapsedTime();
-    if (meshRef.current) {
-      // Rotate the core
-      meshRef.current.rotation.x = Math.sin(t / 2);
-      meshRef.current.rotation.y = Math.cos(t / 2);
+    const offset = scroll.offset; // 0 (topo) a 1 (fundo)
+
+    // Movimento de Câmera Cinematográfico
+    // A câmera começa longe e vai entrando no motor
+    camera.position.z = 15 - offset * 10;
+    camera.position.x = Math.sin(offset * Math.PI) * 2;
+    camera.lookAt(0, 0, 0);
+
+    // Luzes piscando com a velocidade
+    if (lightRef.current) {
+      lightRef.current.intensity = 2 + Math.random() * offset * 5;
+      lightRef.current.position.z = camera.position.z - 2;
     }
   });
 
   return (
-    <Float speed={4} rotationIntensity={1} floatIntensity={2}>
-      <mesh ref={meshRef} scale={active ? 1.5 : 1}>
-        <sphereGeometry args={[1.5, 64, 64]} />
-        {/* 
-           MeshDistortMaterial creates the "Liquid" effect.
-           It displaces vertices based on noise in real-time.
-        */}
-        <MeshDistortMaterial 
-          color={active ? "#ff0055" : "#000000"} 
-          envMapIntensity={1} 
-          clearcoat={1} 
-          clearcoatRoughness={0} 
-          metalness={0.9} 
-          roughness={0.1}
-          distort={0.6} // Strength of the liquid movement
-          speed={active ? 4 : 2} // Speed of the flow
-        />
-      </mesh>
-    </Float>
+    <group>
+      <pointLight ref={lightRef} color="white" distance={5} />
+    </group>
   );
 };
 
 /**
  * ============================================================================
- * THE RING: GLASS TRANSMISSION
+ * INTERFACE HTML (OVERLAY)
  * ============================================================================
  */
-const GlassRing = () => {
-  const ref = useRef();
-  
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime();
-    ref.current.rotation.x = t * 0.2;
-    ref.current.rotation.z = t * 0.1;
-  });
-
+const HtmlContent = () => {
   return (
-    <mesh ref={ref} scale={3}>
-      <torusGeometry args={[1, 0.02, 16, 100]} />
-      <meshStandardMaterial 
-        emissive="#ffffff"
-        emissiveIntensity={2}
-        toneMapped={false}
-        color="white"
-      />
-    </mesh>
-  );
-};
-
-/**
- * ============================================================================
- * BACKGROUND GRID (RETRO-FUTURISM)
- * ============================================================================
- */
-const GridFloor = () => {
-  return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -4, 0]}>
-      <planeGeometry args={[50, 50, 50, 50]} />
-      <meshStandardMaterial 
-        color="#050505" 
-        wireframe 
-        transparent 
-        opacity={0.1} 
-      />
-    </mesh>
-  );
-};
-
-/**
- * ============================================================================
- * POST PROCESSING & LIGHTING
- * ============================================================================
- */
-const SceneEffects = ({ active }) => {
-  return (
-    <EffectComposer disableNormalPass>
-      {/* Intense Bloom for the "Neon" look */}
-      <Bloom 
-        luminanceThreshold={0.1} 
-        mipmapBlur 
-        intensity={1.5} 
-        radius={0.5} 
-      />
+    <Scroll html style={{ width: '100%', color: 'white' }}>
       
-      {/* Chromatic Aberration splits colors at edges (Lens effect) */}
-      <ChromaticAberration 
-        offset={[0.002, 0.002]} // Static offset
-        radialModulation={true}
-        modulationOffset={0.5}
-      />
+      {/* SEÇÃO 1: HERO */}
+      <section style={{ ...sectionStyle, alignItems: 'flex-start' }}>
+        <div style={textContainerStyle}>
+          <h1 style={h1Style}>HYPER<br/>DRIVE</h1>
+          <p style={pStyle}>A próxima geração de propulsão web.</p>
+          <div style={scrollIndicatorStyle}>ROLE PARA INICIAR ↓</div>
+        </div>
+      </section>
 
-      {/* Noise makes it look like film, not plastic */}
-      <Noise opacity={0.1} />
-      
-      {/* Cinematic darkening of corners */}
-      <Vignette eskil={false} offset={0.1} darkness={1.1} />
+      {/* SEÇÃO 2: EXPLODED VIEW */}
+      <section style={{ ...sectionStyle, alignItems: 'flex-end' }}>
+        <div style={{ ...textContainerStyle, textAlign: 'right' }}>
+          <h2 style={h2Style}>ENGENHARIA<br/>DE PRECISÃO</h2>
+          <p style={pStyle}>
+            Cada componente renderizado em tempo real.<br/>
+            Sem vídeos. Sem imagens estáticas.<br/>
+            Pura matemática.
+          </p>
+        </div>
+      </section>
 
-      {/* GLITCH EFFECT - Triggers when user clicks */}
-      <Glitch 
-        delay={[0.5, 1.0]} 
-        duration={[0.1, 0.3]} 
-        strength={[0.2, 0.4]} 
-        mode={GlitchMode.CONSTANT_MILD} 
-        active={active} 
-        ratio={0.85} 
-      />
-    </EffectComposer>
+      {/* SEÇÃO 3: VELOCIDADE */}
+      <section style={{ ...sectionStyle, justifyContent: 'center' }}>
+        <div style={{ ...textContainerStyle, textAlign: 'center', background: 'rgba(0,0,0,0.6)', padding: '40px', backdropFilter: 'blur(10px)', border: '1px solid #333' }}>
+          <h2 style={{ ...h2Style, color: THEME.secondary }}>VELOCIDADE DA LUZ</h2>
+          <p style={pStyle}>O futuro da web é imersivo.</p>
+          <button style={buttonStyle}>ACESSAR SISTEMA</button>
+        </div>
+      </section>
+
+    </Scroll>
   );
 };
 
 /**
  * ============================================================================
- * UI OVERLAY
- * ============================================================================
- */
-const Overlay = ({ active, setActive }) => {
-  return (
-    <div style={{
-      position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-      pointerEvents: 'none', display: 'flex', flexDirection: 'column',
-      justifyContent: 'center', alignItems: 'center', zIndex: 10
-    }}>
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 1 }}
-        style={{ textAlign: 'center' }}
-      >
-        <h1 style={{
-          fontSize: '5rem', fontWeight: '900', color: '#fff', margin: 0,
-          letterSpacing: '-0.05em', lineHeight: 0.9, mixBlendMode: 'difference'
-        }}>
-          HYPER<br/>REALITY
-        </h1>
-        <p style={{ color: '#aaa', fontFamily: 'monospace', marginTop: '1rem' }}>
-          INTERACTIVE LIQUID ENGINE
-        </p>
-        
-        <button 
-          onClick={() => setActive(!active)}
-          style={{
-            pointerEvents: 'auto',
-            marginTop: '2rem',
-            background: active ? '#ff0055' : '#fff',
-            color: active ? '#fff' : '#000',
-            border: 'none',
-            padding: '1rem 3rem',
-            fontSize: '1rem',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            clipPath: 'polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%)',
-            transition: 'all 0.2s'
-          }}
-        >
-          {active ? "STABILIZE SYSTEM" : "INITIATE BREACH"}
-        </button>
-      </motion.div>
-    </div>
-  );
-};
-
-/**
- * ============================================================================
- * MAIN APP
+ * APP PRINCIPAL
  * ============================================================================
  */
 export default function App() {
-  const [active, setActive] = useState(false);
-
   return (
     <div style={{ width: '100vw', height: '100vh', background: '#000' }}>
-      <Canvas dpr={[1, 2]} gl={{ antialias: false, toneMapping: THREE.ReinhardToneMapping }}>
-        <PerspectiveCamera makeDefault position={[0, 0, 10]} fov={50} />
+      <Canvas gl={{ antialias: false }}>
+        <PerspectiveCamera makeDefault position={[0, 0, 15]} fov={50} />
+        <color attach="background" args={[THEME.bg]} />
         
-        {/* Dynamic Lighting */}
-        <color attach="background" args={['#000']} />
-        <ambientLight intensity={0.5} />
-        <spotLight position={[10, 10, 10]} angle={0.15} penumbra={1} intensity={10} color="#00f3ff" />
-        <spotLight position={[-10, -10, -10]} angle={0.15} penumbra={1} intensity={10} color="#ff0055" />
-
-        {/* The Environment reflects on the liquid metal */}
-        <Environment preset="warehouse" />
-
-        {/* 3D Content */}
-        <group>
-          <LiquidCore active={active} />
-          <GlassRing />
-          <GridFloor />
+        {/* Iluminação Ambiente */}
+        <ambientLight intensity={0.2} />
+        <Environment preset="city" />
+        
+        {/* Partículas de fundo (Estrelas) */}
+        <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+        
+        {/* CONTROLE DE SCROLL: O coração da página */}
+        <ScrollControls pages={3} damping={0.2}>
           
-          {/* Floating particles around the core */}
-          <Sparkles 
-            count={200} 
-            scale={12} 
-            size={4} 
-            speed={0.4} 
-            opacity={0.5} 
-            color={active ? "#ff0055" : "#00f3ff"} 
-          />
-        </group>
+          {/* Camada 3D */}
+          <group>
+            <SceneDirector />
+            <Float speed={2} rotationIntensity={0.5} floatIntensity={0.5}>
+              <HyperEngine />
+            </Float>
+            <Sparkles count={100} scale={10} size={5} speed={0.4} opacity={0.5} color={THEME.primary} />
+          </group>
 
-        {/* Post Processing Pipeline */}
-        <SceneEffects active={active} />
+          {/* Camada HTML */}
+          <HtmlContent />
+          
+        </ScrollControls>
 
-        {/* Camera Movement */}
-        <OrbitControls 
-          enableZoom={false} 
-          autoRotate 
-          autoRotateSpeed={active ? 5 : 0.5} 
-          maxPolarAngle={Math.PI / 1.5}
-          minPolarAngle={Math.PI / 3}
-        />
+        {/* Pós-processamento */}
+        <EffectComposer disableNormalPass>
+          <Bloom luminanceThreshold={1} mipmapBlur intensity={1.5} />
+          <Noise opacity={0.05} />
+          <Vignette eskil={false} offset={0.1} darkness={1.1} />
+        </EffectComposer>
+
       </Canvas>
-
-      <Overlay active={active} setActive={setActive} />
       
+      {/* Estilos Globais */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@900&display=swap');
-        body { margin: 0; font-family: 'Inter', sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap');
+        body { margin: 0; font-family: 'Rajdhani', sans-serif; overflow: hidden; }
+        ::-webkit-scrollbar { width: 0px; }
       `}</style>
     </div>
   );
 }
+
+/**
+ * ============================================================================
+ * ESTILOS CSS-IN-JS
+ * ============================================================================
+ */
+const sectionStyle = {
+  height: '100vh',
+  width: '100vw',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  padding: '10vw',
+  boxSizing: 'border-box'
+};
+
+const textContainerStyle = {
+  zIndex: 10,
+  maxWidth: '600px'
+};
+
+const h1Style = {
+  fontSize: '8rem',
+  lineHeight: '0.8',
+  margin: 0,
+  fontWeight: '700',
+  letterSpacing: '-0.02em',
+  color: '#fff'
+};
+
+const h2Style = {
+  fontSize: '4rem',
+  margin: '0 0 20px 0',
+  fontWeight: '700',
+  color: '#fff'
+};
+
+const pStyle = {
+  fontSize: '1.5rem',
+  color: '#aaa',
+  margin: '20px 0'
+};
+
+const scrollIndicatorStyle = {
+  marginTop: '50px',
+  fontSize: '1rem',
+  letterSpacing: '0.2em',
+  color: THEME.primary,
+  animation: 'pulse 2s infinite'
+};
+
+const buttonStyle = {
+  padding: '15px 40px',
+  fontSize: '1.2rem',
+  background: THEME.secondary,
+  color: 'white',
+  border: 'none',
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  fontWeight: 'bold',
+  marginTop: '20px',
+  clipPath: 'polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%)',
+  transition: 'transform 0.2s'
+};
